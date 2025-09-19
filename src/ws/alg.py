@@ -168,8 +168,8 @@ def distance(p1, p2, scale=None):
     theta1 = long1*degrees_to_radians
     theta2 = long2*degrees_to_radians
         
-    cos = (math.sin(phi1)*math.sin(phi2)*math.cos(theta1 - theta2) + math.cos(phi1)*math.cos(phi2))
-    arc = math.acos(cos)
+    cos = (math.sin(phi1) * math.sin(phi2) * math.cos(theta1 - theta2) + math.cos(phi1) * math.cos(phi2))
+    arc = math.acos(min(1, cos))
     return arc * get_earth_radius(scale)
 
 
@@ -214,7 +214,10 @@ def find_json_path(e, value, path=''):
 def download_zipcodes(country_code):
     """Download zipcodes for this country code
     """
-    filename = country_code.upper() + '.zip'
+    if country_code in ('ca', 'gb', 'nl'):
+        filename = country_code.upper() + '_full.csv.zip'
+    else:
+        filename = country_code.upper() + '.zip'
     if os.path.exists(filename):
         zip_data = open(filename, 'rb').read()
     else:

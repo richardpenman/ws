@@ -1,11 +1,16 @@
 
 import collections, json, random, re, time, os, urllib.parse
+import xml.etree.ElementTree as ET
 import concurrent
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Callable
+
 import requests
+import stealth_requests
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
+
 from . import adt, common, pdict, services, settings, xpath
 
 
@@ -59,6 +64,9 @@ class Response:
     def jsonp(self):
         return common.parse_jsonp(self.text)
 
+    def xml(self):
+        return ET.fromstring(self.text)
+
     def __str__(self):
         return '{}: {}'.format(self.status_code, self.text[:100] if self.text else '')
 
@@ -82,7 +90,7 @@ class Throttle:
 
 
 class Download:
-    def __init__(self, cache_file='', cache=None, session=None, delay=1, max_retries=1, proxy_file=None, proxies=None, cache_expires=None, timeout=30):
+    def __init__(self, cache_file='', cache=None, session=None, delay=1, max_retries=1, proxy_file=None, proxies=None, cache_expires=None, timeout=30, browser=None, render=False, stealth=False):
         self.cache = cache or pdict.PersistentDict(cache_file or settings.cache_file, expires=cache_expires)
         self.session = session
         self.timeout = timeout
@@ -90,6 +98,9 @@ class Download:
         self.proxies = open(proxy_file).read().splitlines() if proxy_file and os.path.exists(proxy_file) else proxies
         # track the number of consecutive download errors for each proxy
         self.proxy_errors = collections.Counter()
+        self.browser = browser or Browser()
+        self.render = render
+        self.stealth = stealth
         self._throttle = Throttle(delay)
 
     def _format_headers(self, url, headers, user_agent):
@@ -115,7 +126,7 @@ class Download:
             return num_failures < max_retries
 
 
-    def get(self, url, delay=None, max_retries=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, key=None):
+    def get(self, url, delay=None, max_retries=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, render=False, stealth=False, key=None):
         if isinstance(data, dict):
             data = urllib.parse.urlencode(sorted(data.items()))
         key = key or Request(url, data=data).get_key()
@@ -130,37 +141,45 @@ class Download:
                 raise KeyError()
 
         except KeyError:
-            print('Download: {} {}'.format(url, self._format_data(data)))
-            if self.session is None:
-                session = requests.session()
+            if self.render or render:
+                response = self.browser.get(url, self.get_proxy(), self.timeout)
             else:
-                session = self.session
-            headers = self._format_headers(url, headers, user_agent)
-            for num_failures in range(max_retries + 1):
-                proxy = self.get_proxy() if use_proxy else None
-                self._throttle(delay, proxy)
-                try:
-                    request_proxies = {'http': proxy, 'https': proxy} if proxy else None
-                    if data is not None:
-                        request_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
-                    else:
-                        request_response = session.get(url, headers=headers, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
-                except Exception as e:
-                    print('Download error:', e)
-                    response = Response('', 500, str(e))
-                    self.proxy_errors[proxy] += 1
-                else:
-                    content = request_response.content if not request_response.encoding or not auto_encoding else request_response.text
-                    response = Response(content, request_response.status_code, request_response.reason)
-                    if request_response.url != url:
-                        response.redirect_url = request_response.url
-                    if self._should_retry(response, num_failures, max_retries):
-                        print('Download error:', response.status_code)
-                    else:
-                        break
-                    self.proxy_errors[proxy] = 0
+                response = self.fetch(url, delay, max_retries, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth)
             if write_cache:
                 self.cache[key] = response
+        return response
+
+                
+    def fetch(self, url, delay, max_retries, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth):
+        if self.session is None:
+            session = stealth_requests.StealthSession() if self.stealth or stealth else requests.Session()
+        else:
+            session = self.session
+        headers = self._format_headers(url, headers, user_agent)
+        for num_failures in range(max_retries + 1):
+            print('Download: {} {}'.format(url, self._format_data(data)))
+            proxy = self.get_proxy() if use_proxy else None
+            self._throttle(delay, proxy)
+            try:
+                request_proxies = {'http': proxy, 'https': proxy} if proxy else None
+                if data is not None:
+                    request_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
+                else:
+                    request_response = session.get(url, headers=headers, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
+            except Exception as e:
+                print('ws.download error:', e)
+                response = Response('', 500, str(e))
+                self.proxy_errors[proxy] += 1
+            else:
+                content = request_response.content if not request_response.encoding or not auto_encoding else request_response.text
+                response = Response(content, request_response.status_code, request_response.reason)
+                if request_response.url != url:
+                    response.redirect_url = request_response.url
+                if self._should_retry(response, num_failures, max_retries):
+                    print('Download error:', response.status_code)
+                else:
+                    break
+                self.proxy_errors[proxy] = 0
         return response
 
 
@@ -231,3 +250,63 @@ class Download:
                         self.cache[request.get_key()] = response
                         yield from process_callback(request, response)
                     del future_to_request[future]
+
+
+class Browser:
+    def __init__(self, headless=True):
+        self.headless = headless
+        self.initialized = False
+
+    def __del__(self):
+        if self.initialized:
+            self.playwright.stop()
+            self.browser.close()
+
+    def get(self, url, proxy=None, timeout=30, wait_until='load'):
+        """
+        wait_until: commit -> domcontentloaded -> load
+        """
+        print('Rendering: {}'.format(url))
+        if not self.initialized:
+            self.initialized = True
+            self.playwright = sync_playwright().start()
+            self.browser = self.playwright.firefox.launch(headless=self.headless)
+
+        context = self.browser.new_context(proxy=self.parse_proxy(proxy))
+        page = context.new_page()
+        try:
+            response = page.goto(url, wait_until=wait_until, timeout=timeout * 1000)
+        except PlaywrightError as e:
+            print('Render error:', e)
+            content = ''
+            status = 500
+            error = str(e)
+        else:
+            if wait_until == 'commit':
+                content = response.text()
+            else:
+                content = page.content()
+            status = response.status
+            error = ''
+        page.close()
+        context.close()
+        return Response(content, status, error)
+
+    def parse_proxy(self, server):
+        if server:
+            login_regex = re.match('http://(.*?):(.*?)@(.*?)$', server)
+            if login_regex:
+                username, password, server = login_regex.groups()
+                proxy = {
+                    'server': 'http://' + server,
+                    'username': username,
+                    'password': password
+                }
+            else:
+                if not server.startswith('http'):
+                    server = 'http://' + server
+                proxy = {
+                    'server': server
+                }
+            print('PROXY:', proxy)
+            return proxy

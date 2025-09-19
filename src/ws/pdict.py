@@ -208,6 +208,11 @@ class PersistentDict:
         return data
 
 
+    def touch(self, key, t=None):
+        updated = t or datetime.datetime.now()
+        self.conn.execute("UPDATE config SET updated=? WHERE key=?;", (updated, key))
+        
+
     def meta(self, key, value=None):
         """Get / set meta for this value
 
