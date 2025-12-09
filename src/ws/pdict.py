@@ -208,6 +208,20 @@ class PersistentDict:
         return data
 
 
+    def rename(self, cur_key, to_key):
+        """Rename the data at `cur_key` to `to_key`
+        """
+        c = self.conn.cursor()
+        num_rows = 0
+        c.execute("BEGIN")
+        c.execute("DELETE FROM config WHERE key=?;", (to_key,))
+        num_rows += c.rowcount
+        c.execute("UPDATE config SET key=? WHERE key=?;", (to_key, cur_key))
+        num_rows += c.rowcount
+        c.execute("COMMIT")
+        return num_rows
+
+
     def touch(self, key, t=None):
         updated = t or datetime.datetime.now()
         self.conn.execute("UPDATE config SET updated=? WHERE key=?;", (updated, key))

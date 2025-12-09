@@ -1,5 +1,5 @@
 
-import collections, json, random, re, time, os, urllib.parse
+import collections, json, random, re, time, os, logging, urllib.parse
 import xml.etree.ElementTree as ET
 import concurrent
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +15,7 @@ from . import adt, common, pdict, services, settings, xpath
 
 
 SUCCESS_STATUS = (200, 201)
-NON_RETRIABLE_STATUS = (404, )
+NON_RETRIABLE_STATUS = (400, 405, 411, 413, 415, 422, 431)
 
 
 @dataclass
@@ -105,7 +105,7 @@ class Download:
 
     def _format_headers(self, url, headers, user_agent):
         headers = headers or {}
-        for name, value in list(settings.default_headers.items()) + [('User-Agent', user_agent), ('Referer', url)]:
+        for name, value in list(settings.default_headers.items()) + [('User-Agent', user_agent), ('Referer', url), ('Connection', 'close')]:
             if name not in headers and name.lower() not in headers:
                 headers[name] = value
         return headers
@@ -119,14 +119,18 @@ class Download:
             data_str = ''
         return data_str
 
-    def _should_retry(self, response, num_failures=0, max_retries=1):
-        if response.status_code in SUCCESS_STATUS or response.status_code in NON_RETRIABLE_STATUS:
+    def _should_retry(self, response, num_failures=0, max_retries=1, retry_callback=None):
+        if not isinstance(response, Response):
             return False
+        elif response.status_code in SUCCESS_STATUS or response.status_code in NON_RETRIABLE_STATUS:
+            return False
+        elif retry_callback is not None and retry_callback(response):
+            return True
         else:
             return num_failures < max_retries
 
 
-    def get(self, url, delay=None, max_retries=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, render=False, stealth=False, key=None):
+    def get(self, url, delay=None, max_retries=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, render=False, stealth=False, key=None):
         if isinstance(data, dict):
             data = urllib.parse.urlencode(sorted(data.items()))
         key = key or Request(url, data=data).get_key()
@@ -137,22 +141,22 @@ class Download:
             response = self.cache[key]
             if isinstance(response, (str, dict)):
                 response = Response(response, 200, '')
-            if self._should_retry(response, 0, max_retries):
+            if self._should_retry(response, num_failures=0, max_retries=max_retries, retry_callback=retry_callback):
                 raise KeyError()
 
         except KeyError:
             if self.render or render:
                 response = self.browser.get(url, self.get_proxy(), self.timeout)
             else:
-                response = self.fetch(url, delay, max_retries, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth)
+                response = self.fetch(url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth)
             if write_cache:
                 self.cache[key] = response
         return response
 
                 
-    def fetch(self, url, delay, max_retries, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth):
+    def fetch(self, url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth):
         if self.session is None:
-            session = stealth_requests.StealthSession() if self.stealth or stealth else requests.Session()
+            session = stealth_requests.StealthSession(http_version=3) if self.stealth or stealth else requests.Session()
         else:
             session = self.session
         headers = self._format_headers(url, headers, user_agent)
@@ -175,11 +179,13 @@ class Download:
                 response = Response(content, request_response.status_code, request_response.reason)
                 if request_response.url != url:
                     response.redirect_url = request_response.url
-                if self._should_retry(response, num_failures, max_retries):
+                if self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
                     print('Download error:', response.status_code)
                 else:
                     break
                 self.proxy_errors[proxy] = 0
+        if self.session is None:
+            session.close()
         return response
 
 
@@ -231,14 +237,16 @@ class Download:
                 for request in cur_requests:
                     try:
                         response = self.cache[request.get_key()]
-                        if self._should_retry(response):
+                        if self._should_retry(response, max_retries=self.max_retries):
                             raise KeyError()
                     except KeyError:
                         future = executor.submit(self.get, url=request.url, headers=request.headers, data=request.data, read_cache=False, write_cache=False)
                         future_to_request[future] = request
                     else:
                         yield from process_callback(request, response)
-
+        
+                if future_to_request and requests:
+                    common.logger.info("{} requests in queue".format(len(requests)))
                 # process the completed callbacks
                 for future in concurrent.futures.as_completed(future_to_request):
                     request = future_to_request[future]

@@ -16,8 +16,8 @@ if not os.path.exists(state_dir):
         #print 'Unable to create state directory:', e
 cache_file  = os.path.relpath(os.path.join(state_dir, 'cache.db')) # file to use for pdict cache
 log_file    = os.path.join(state_dir, 'webscraping.log') # default logging file
+log_level = logging.INFO
 
-log_level = logging.INFO # logging level
 default_encoding = 'utf-8'
 default_headers =  {
     'Accept-Language': 'en-us,en;q=0.5',

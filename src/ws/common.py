@@ -403,17 +403,20 @@ class UnicodeWriter:
         return s
 
     def writerow(self, row):
-        """Write row to output
+        """Write row to output and returns whether was written.
         """
         #row = [self._cell(col) for col in row]
         row = tuple(row)
         if self.unique:
             key = hash(row)
-            if key not in self.seen:
+            if key in self.seen:
+                return False
+            else:
                 self.seen.add(key)
                 self.writer.writerow(row)
         else:
             self.writer.writerow(row)
+        return True
             
     def writerows(self, rows):
         """Write multiple rows to output

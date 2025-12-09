@@ -231,10 +231,10 @@ def download_zipcodes(country_code):
             if country_code.upper() in filename:
                 tsv_data = zf.read(filename).decode('utf-8')
                 for row in csv.reader(tsv_data.splitlines(), delimiter='\t'):
-                    zip_code, city = row[1:3]
+                    zip_code, city, state = row[1:4]
                     lat, lng = row[9:11]
                     found = True
-                    yield zip_code, lng, lat, city
+                    yield zip_code, lng, lat, city, state
                 break
 
     if not found:
@@ -247,18 +247,27 @@ def download_zipcodes(country_code):
                 zip_code = str(tds[2])
                 tds = trs.pop(0).search('./td')
                 lat, lng = str(tds[1].get('./a/small')).split('/')
-                yield zip_code, lng, lat, city
+                yield zip_code, lng, lat, city, ''
 
 
 def generate_zipcode_file(country_code, should_split=False):
     """Generate zip code file for the given country code ordered by the minimum distance apart with proceeding zip codes
     """
     outstanding_zips = {}
-    for zip_code, lng, lat, city in download_zipcodes(country_code):
+    for zip_code, lng, lat, city, state in download_zipcodes(country_code):
         if should_split:
             zip_code = zip_code.split('-')[0]
+        if country_code == 'us':
+            import zipcodes
+            result_list = zipcodes.matching(zip_code)
+            if result_list:
+                result = result_list[0]
+                if result['zip_code_type'] != 'STANDARD':
+                    continue
+            else:
+                continue
         if lat and lng and 'CEDEX' not in zip_code:
-            outstanding_zips[zip_code] = float(lng), float(lat), city
+            outstanding_zips[zip_code] = float(lng), float(lat), city, state
     # keep track of the current max distance from a zip code
     # any further added points can only be closer
     max_known_distances = {}
@@ -274,8 +283,8 @@ def generate_zipcode_file(country_code, should_split=False):
             if max_known_distance < min_distance:
                 # can skip processing this coordinate until target distance reaches the known maximum distance
                 continue
-            lng, lat, city = outstanding_zips[zip_code]
-            for _, other_lng, other_lat, _, _ in output_rows:
+            lng, lat, city, state = outstanding_zips[zip_code]
+            for _, other_lng, other_lat, *_ in output_rows:
                 this_distance = distance((lat, lng), (other_lat, other_lng), scale='km')
                 if this_distance < min_distance:
                     # this distance is less than the current target
@@ -283,15 +292,15 @@ def generate_zipcode_file(country_code, should_split=False):
                     break
             else:
                 # found a new coordinates that is atleast the target distance away from every other coordinate
-                output_rows.append((zip_code, lng, lat, city, min_distance))
+                output_rows.append((zip_code, lng, lat, city, state, min_distance))
                 del outstanding_zips[zip_code]
     # add any leftover points with 0 distance
-    for zip_code, (lng, lat, city) in outstanding_zips.items():
-        output_rows.append((zip_code, lng, lat, city, 0))
+    for zip_code, (lng, lat, city, state) in outstanding_zips.items():
+        output_rows.append((zip_code, lng, lat, city, state, 0))
 
     output_filename = '%s_locations.csv' % country_code
     writer = csv.writer(open(output_filename, 'w'))
-    writer.writerow(['Zip code', 'Longitude', 'Latitude', 'City', 'Distance'])
+    writer.writerow(['Zip code', 'Longitude', 'Latitude', 'City', 'State', 'Distance'])
     writer.writerows(output_rows)
     print('Output to', output_filename)
 
@@ -308,7 +317,7 @@ def get_zip_lng_lats(filename, distance=None):
     """
     reader = csv.reader(open(filename))
     header = next(reader)
-    for zip_code, lng, lat, _, zip_distance in reader:
+    for zip_code, lng, lat, *_, zip_distance in reader:
         lng, lat, zip_distance = float(lng), float(lat), int(zip_distance)
         if distance is None or distance <= zip_distance:
             yield zip_code, lng, lat
