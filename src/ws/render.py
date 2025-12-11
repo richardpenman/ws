@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import os, re, signal, sys, time, urllib, zipfile
+import os, queue, re, signal, sys, threading, time, urllib, zipfile
 from http.cookiejar import Cookie, CookieJar
 from . import download, xpath
 from selenium.common.exceptions import TimeoutException
@@ -9,7 +9,7 @@ import undetected_chromedriver as uc
 
 
 class CacheBrowser:
-    def __init__(self, headless=True, cache=None, cookie_jar=None, cookie_key=None, proxy=None, init_callback=None, timeout=None):
+    def __init__(self, headless=True, cache=None, cookie_jar=None, cookie_key=None, proxy=None, init_callback=None, timeout=30):
         self.chrome_options = uc.ChromeOptions()
         self.chrome_options.add_argument("--disable-dev-shm-usage") # https://stackoverflow.com/a/50725918/1689770
         self.chrome_options.add_argument("--disable-gpu") #https://stackoverflow.com/questions/51959986/how-to-solve-selenium-chromedriver-timed-out-receiving-message-from-renderer-exc
@@ -21,7 +21,6 @@ class CacheBrowser:
 
         self.driver = None
         self.timeout = timeout
-        #self.capabilities = webdriver.DesiredCapabilities.CHROME
         self.cache = download.Download().cache if cache is None else cache
         self.cookie_key = cookie_key
         if cookie_key:
@@ -37,6 +36,8 @@ class CacheBrowser:
     def init(self):
         if self.driver is None:
             self.driver = uc.Chrome(options=self.chrome_options)
+            self.driver.set_page_load_timeout(self.timeout)
+            self.driver.set_script_timeout(self.timeout)
             if self.init_callback is not None:
                 self.init_callback()
 
@@ -82,9 +83,38 @@ class CacheBrowser:
             print('saving:', self.driver.get_cookies())
             self.cache[self.cookie_key] = self.driver.get_cookies()
 
-    def wait(self, xpath, timeout=20):
-        self.driver.implicitly_wait(timeout)
+    def wait(self, xpath):
+        self.driver.implicitly_wait(self.timeout)
         return self.driver.find_element(By.XPATH, xpath)
+
+    def get_page_source(self):
+        result_queue = queue.Queue()
+
+        def get_page_source_cb():
+            try:
+                # The operation that might hang
+                html = self.driver.page_source
+            except Exception as e:
+                response = download.Response('', 500, str(e)) # Pass any Selenium error back
+            else:
+                # chrome will wrap JSON in pre - how to solve this properly?
+                if '<body><pre>{' in html:
+                    html = xpath.get(html, '/html/body/pre')
+                response = download.Response(html, 200, '')
+            result_queue.put(response)
+
+        # Start the fetching in a separate thread
+        fetch_thread = threading.Thread(target=get_page_source_cb)
+        fetch_thread.start()
+        fetch_thread.join(timeout=5)
+
+        # Check if the thread is still alive after the wait
+        if fetch_thread.is_alive():
+            # If alive, it means the operation timed out
+            response = download.Response('', 408, 'driver.page_source timed out')
+        else:
+            response = result_queue.get(block=False)
+        return response
 
 
     def get(self, url, read_cache=True, write_cache=True, retry=True, delay=5, wait_xpath=None):
@@ -97,8 +127,6 @@ class CacheBrowser:
         except KeyError:
             self.init()
             print('Rendering:', url)
-            if self.timeout:
-                self.driver.set_page_load_timeout(self.timeout)
             try:
                 self.driver.get(url)
             except TimeoutException:
@@ -109,11 +137,7 @@ class CacheBrowser:
                 if wait_xpath:
                     self.wait(wait_xpath)
                 self.load_cookies(url)
-                html = self.driver.page_source
-                # chrome will wrap JSON in pre - how to solve this properly?
-                if '<body><pre>{' in html:
-                    html = xpath.get(html, '/html/body/pre')
-                response = download.Response(html, 200, '')
+                response = self.get_page_source()
                 if write_cache:
                     self.cache[url] = response
                 self.save_cookies()

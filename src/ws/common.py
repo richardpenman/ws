@@ -399,13 +399,12 @@ class UnicodeWriter:
         elif s is None:
             s = ''
         else:
-            pass #s = bytes(s)
+            pass
         return s
 
     def writerow(self, row):
         """Write row to output and returns whether was written.
         """
-        #row = [self._cell(col) for col in row]
         row = tuple(row)
         if self.unique:
             key = hash(row)
