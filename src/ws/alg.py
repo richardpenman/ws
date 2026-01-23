@@ -211,6 +211,23 @@ def find_json_path(e, value, path=''):
     return results
 
 
+def find_json_range(html, start_key):
+    """Find json object that starts with start_key by counting opening and closing braces
+    """
+    start_index = end_index = html.index(start_key)
+    num_open_braces = 0
+    while end_index < len(html):
+        c = html[end_index]
+        if c == '{':
+            num_open_braces += 1
+        elif c == '}':
+            num_open_braces -= 1
+            if num_open_braces == 0:
+                return html[start_index : end_index + 1]
+        end_index += 1
+    raise ValueError('Did not find closing brace: {}'.format(num_open_braces))
+
+
 def download_zipcodes(country_code):
     """Download zipcodes for this country code
     """

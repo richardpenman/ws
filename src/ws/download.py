@@ -67,6 +67,9 @@ class Response:
     def xml(self):
         return ET.fromstring(self.text)
 
+    def save(self, filename, flag='w'):
+        open(filename, flag).write(self.text)
+
     def __str__(self):
         return '{}: {}'.format(self.status_code, self.text[:100] if self.text else '')
 
@@ -199,6 +202,14 @@ class Download:
     def geocode(self, address, api_key):
         gm = services.GoogleMaps(self, api_key)
         return gm.geocode(address, delay=self._throttle.delay)
+
+
+    def wayback(self, url):
+        available_api = self.get('http://archive.org/wayback/available?url=' + url)
+        print(available_api.text)
+        wayback_url = available_api.json()['archived_snapshots'].get('closest', {}).get('url')
+        if wayback_url:
+           return self.get(wayback_url)
 
 
     def threaded(self, requests, max_workers=4, max_queue=1000, filter_duplicates=True):
