@@ -206,7 +206,6 @@ class Download:
 
     def wayback(self, url):
         available_api = self.get('http://archive.org/wayback/available?url=' + url)
-        print(available_api.text)
         wayback_url = available_api.json()['archived_snapshots'].get('closest', {}).get('url')
         if wayback_url:
            return self.get(wayback_url)
