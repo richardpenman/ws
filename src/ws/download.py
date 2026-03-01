@@ -43,14 +43,15 @@ class Response:
         self.redirect_url = None
 
     def get(self, path):
-        if self.tree is None:
-            self.tree = xpath.Tree(self.text)
-        return self.tree.get(path)
+        return self.get_tree().get(path)
 
     def search(self, path):
+        return self.get_tree().search(path)
+
+    def get_tree(self):
         if self.tree is None:
             self.tree = xpath.Tree(self.text)
-        return self.tree.search(path)
+        return self.tree
 
     def regex(self, r, flags=0):
         return re.compile(r, flags=flags).search(self.text)

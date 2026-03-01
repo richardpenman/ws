@@ -36,6 +36,14 @@ class Tree:
         else:
             return Tree(None)
 
+    def remove(self, e):
+        try:
+            e.doc.getparent().remove(e.doc)
+        except ValueError:
+            return False
+        else:
+            return True
+
     def regex(self, r, flags=0):
         return re.compile(r, flags=flags).search(str(self))
 
