@@ -15,7 +15,7 @@ from . import adt, common, pdict, services, settings, xpath
 
 
 SUCCESS_STATUS = (200, 201)
-NON_RETRIABLE_STATUS = (400, 405, 411, 413, 415, 422, 431)
+NON_RETRIABLE_STATUS = (400, 404, 405, 411, 413, 415, 422, 431)
 
 
 @dataclass
@@ -67,6 +67,17 @@ class Response:
 
     def xml(self):
         return ET.fromstring(self.text)
+
+    def utf(self):
+        try:
+            self.text = self.text.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        try:
+            self.text = self.text.encode('latin-1').decode('utf-8')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
+        return self
 
     def save(self, filename, flag='w'):
         open(filename, flag).write(self.text)

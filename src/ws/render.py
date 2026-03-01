@@ -9,7 +9,8 @@ import undetected_chromedriver as uc
 
 
 class CacheBrowser:
-    def __init__(self, headless=True, cache=None, cookie_jar=None, cookie_key=None, proxy=None, init_callback=None, timeout=30):
+    def __init__(self, executable_path=os.path.expanduser('~/bin/chromedriver'), headless=True, cache=None, cookie_jar=None, cookie_key=None, proxy=None, init_callback=None, timeout=30):
+        self.executable_path = executable_path
         self.chrome_options = uc.ChromeOptions()
         self.chrome_options.add_argument("--disable-dev-shm-usage") # https://stackoverflow.com/a/50725918/1689770
         self.chrome_options.add_argument("--disable-gpu") #https://stackoverflow.com/questions/51959986/how-to-solve-selenium-chromedriver-timed-out-receiving-message-from-renderer-exc
@@ -35,7 +36,7 @@ class CacheBrowser:
 
     def init(self):
         if self.driver is None:
-            self.driver = uc.Chrome(options=self.chrome_options)
+            self.driver = uc.Chrome(driver_executable_path=self.executable_path, options=self.chrome_options)
             self.driver.set_page_load_timeout(self.timeout)
             self.driver.set_script_timeout(self.timeout)
             if self.init_callback is not None:

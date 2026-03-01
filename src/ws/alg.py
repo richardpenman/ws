@@ -89,6 +89,21 @@ def extract_emails(html, ignored=None):
     return emails
 
 
+def decode_cf_email(e):
+    """https://stackoverflow.com/questions/36911296/scraping-of-protected-email
+    """
+    result = ''
+    if e:
+        try:
+            k = int(e[:2], 16)
+        except ValueError:
+            pass
+        else:
+            for i in range(2, len(e) - 1, 2):
+                result += chr(int(e[i:i+2], 16)^k)
+    return result
+
+
 def extract_phones(html):
     """Extract phone numbers from this HTML
 
