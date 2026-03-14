@@ -1,8 +1,8 @@
 
-import collections, json, random, re, time, os, logging, urllib.parse
+import collections, json, random, re, time, os, logging, traceback, urllib.parse
 import xml.etree.ElementTree as ET
 import concurrent
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Callable
@@ -10,6 +10,7 @@ from typing import Callable
 import requests
 import stealth_requests
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
+import ua_generator
 
 from . import adt, common, pdict, services, settings, xpath
 
@@ -71,7 +72,7 @@ class Response:
     def utf(self):
         try:
             self.text = self.text.decode('utf-8')
-        except UnicodeDecodeError:
+        except (AttributeError, UnicodeDecodeError):
             pass
         try:
             self.text = self.text.encode('latin-1').decode('utf-8')
@@ -120,7 +121,8 @@ class Download:
 
     def _format_headers(self, url, headers, user_agent):
         headers = headers or {}
-        for name, value in list(settings.default_headers.items()) + [('User-Agent', user_agent), ('Referer', url), ('Connection', 'close')]:
+        user_agent = user_agent or ua_generator.generate(device='desktop', browser=('chrome', 'edge')).text
+        for name, value in list(settings.default_headers.items()) + [('User-Agent', user_agent), ('Referer', url)]:
             if name not in headers and name.lower() not in headers:
                 headers[name] = value
         return headers
@@ -134,16 +136,23 @@ class Download:
             data_str = ''
         return data_str
 
-    def _should_retry(self, response, num_failures=0, max_retries=1, retry_callback=None):
+    def _is_success(self, response):
         if not isinstance(response, Response):
+            return True
+        elif response.status_code in SUCCESS_STATUS:
+            return True
+        else:
             return False
-        elif response.status_code in SUCCESS_STATUS or response.status_code in NON_RETRIABLE_STATUS:
+
+    def _should_retry(self, response, num_failures=0, max_retries=1, retry_callback=None):
+        if self._is_success(response):
+            return False
+        elif response.status_code in NON_RETRIABLE_STATUS:
             return False
         elif retry_callback is not None and retry_callback(response):
             return True
         else:
             return num_failures < max_retries
-
 
     def get(self, url, delay=None, max_retries=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, render=False, stealth=False, key=None):
         if isinstance(data, dict):
@@ -156,9 +165,8 @@ class Download:
             response = self.cache[key]
             if isinstance(response, (str, dict)):
                 response = Response(response, 200, '')
-            if self._should_retry(response, num_failures=0, max_retries=max_retries, retry_callback=retry_callback):
+            if self._should_retry(response):
                 raise KeyError()
-
         except KeyError:
             if self.render or render:
                 response = self.browser.get(url, self.get_proxy(), self.timeout)
@@ -176,7 +184,6 @@ class Download:
             session = self.session
         headers = self._format_headers(url, headers, user_agent)
         for num_failures in range(max_retries + 1):
-            print('Download: {} {}'.format(url, self._format_data(data)))
             proxy = self.get_proxy() if use_proxy else None
             self._throttle(delay, proxy)
             try:
@@ -194,10 +201,14 @@ class Download:
                 response = Response(content, request_response.status_code, request_response.reason)
                 if request_response.url != url:
                     response.redirect_url = request_response.url
-                if self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
-                    print('Download error:', response.status_code)
-                else:
+                summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
+                if self._is_success(response):
+                    print(f'Success: {summary}')
                     break
+                else:
+                    print(f'Error: {summary} ({num_failures + 1}/{max_retries})')
+                    if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
+                        break
                 self.proxy_errors[proxy] = 0
         if self.session is None:
             session.close()
@@ -223,63 +234,87 @@ class Download:
            return self.get(wayback_url)
 
 
-    def threaded(self, requests, max_workers=4, max_queue=1000, filter_duplicates=True):
-        def process_callback(request, response):
-            if request.callback:
-                for next_request in request.callback(request, response) or []:
-                    if isinstance(next_request, Request):
-                        if filter_duplicates:
-                            if next_request.get_key() in seen:
-                                continue
-                            else:
-                                seen.add(next_request.get_key())
-                        requests.append(next_request)
-                    else:
-                        yield next_request
-
-        seen = adt.HashDict()
-        if filter_duplicates:
-            filtered_requests = []
-            for request in requests:
-                if request.get_key() not in seen:
-                    seen.add(request.get_key())
-                    filtered_requests.append(request)
-            requests = filtered_requests
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            while requests:
-                # avoid loading too many requests into memory at once
-                cur_requests = []
-                for _ in range(max_queue):
-                    if requests:
-                        cur_requests.append(requests.pop())
-                    else:
-                        break
-
-                future_to_request = {}
-                for request in cur_requests:
-                    try:
-                        response = self.cache[request.get_key()]
-                        if self._should_retry(response, max_retries=self.max_retries):
-                            raise KeyError()
-                    except KeyError:
-                        future = executor.submit(self.get, url=request.url, headers=request.headers, data=request.data, read_cache=False, write_cache=False)
-                        future_to_request[future] = request
-                    else:
-                        yield from process_callback(request, response)
+    def threaded(self, requests_iterator, max_workers=4, filter_duplicates=True):
+        request_stream = iter(requests_iterator)
         
-                if future_to_request and requests:
-                    common.logger.info("{} requests in queue".format(len(requests)))
-                # process the completed callbacks
-                for future in concurrent.futures.as_completed(future_to_request):
-                    request = future_to_request[future]
+        seen = adt.HashDict() 
+        callback_queue = collections.deque()
+        active_futures = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            while True:
+                # 1. Fill the executor slots
+                while len(active_futures) < max_workers:
+                    request = None
+                    
+                    # Priority 1: Get requests from callbacks (discovered links)
+                    if callback_queue:
+                        request = callback_queue.popleft()
+                    # Priority 2: Get requests from the main stream
+                    else:
+                        try:
+                            request = next(request_stream)
+                        except StopIteration:
+                            break # Main stream exhausted
+
+                    if request:
+                        # Duplicate filtering
+                        if filter_duplicates:
+                            key = request.get_key()
+                            if key in seen:
+                                continue
+                            seen.add(key)
+
+                        # Cache Check
+                        try:
+                            response = self.cache[request.get_key()]
+                            if self._should_retry(response, max_retries=self.max_retries):
+                                raise KeyError()
+                            # Process cached items immediately (no thread needed)
+                            yield from self._handle_threaded_callback(request, response, callback_queue)
+                        except KeyError:
+                            # Submit to thread pool
+                            future = executor.submit(
+                                self.get, url=request.url, headers=request.headers, 
+                                data=request.data, read_cache=False, write_cache=False
+                            )
+                            active_futures[future] = request
+
+                # 2. If nothing is running and nothing is left in streams, we are done
+                if not active_futures:
+                    break
+
+                # 3. Wait for the NEXT single download to finish
+                done, _ = wait(active_futures.keys(), return_when=FIRST_COMPLETED)
+
+                for future in done:
+                    request = active_futures.pop(future)
                     try:
                         response = future.result()
-                    except Exception as e:
-                        print('{} generated an exception: {}'.format(request.url, e))
-                    else:
                         self.cache[request.get_key()] = response
-                        yield from process_callback(request, response)
-                    del future_to_request[future]
+                        yield from self._handle_threaded_callback(request, response, callback_queue)
+                    except Exception as e:
+                        print(f'Error on {request.url}: {e}')
+
+        
+    def _handle_threaded_callback(self, request, response, callback_queue):
+        """Internal helper to process callbacks and feed the callback_queue."""
+        if request.callback:
+            callback_requests = request.callback(request, response) or iter([])
+            while True:
+                try:
+                    next_request = next(callback_requests)
+                except StopIteration:
+                    break
+                except Exception:
+                    print('Callback error: ' + request.url)
+                    print(traceback.format_exc())
+                else:
+                    if isinstance(next_request, Request):
+                        # We put discovered requests in the callback_queue to be processed next
+                        callback_queue.append(next_request)
+                    else:
+                        yield next_request
 
 
 class Browser:
