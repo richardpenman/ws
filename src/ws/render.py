@@ -36,7 +36,7 @@ class CacheBrowser:
 
     def init(self):
         if self.driver is None:
-            self.driver = uc.Chrome(driver_executable_path=self.executable_path, options=self.chrome_options)
+            self.driver = uc.Chrome(options=self.chrome_options, version_main=147)
             self.driver.set_page_load_timeout(self.timeout)
             self.driver.set_script_timeout(self.timeout)
             if self.init_callback is not None:

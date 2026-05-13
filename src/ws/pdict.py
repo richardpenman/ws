@@ -172,6 +172,28 @@ class PersistentDict:
             key, self.serialize(value), self.serialize({}), updated)
         )
 
+    def add(self, d):
+        """Add all the key value pairs in the given dict
+        """
+        if d:
+            c = self.conn.cursor()
+            c.execute("BEGIN")
+            for key, value in d.items():
+                updated = datetime.datetime.now()
+                self.conn.execute("INSERT OR REPLACE INTO config (key, value, meta, updated) VALUES(?, ?, ?, ?);", (
+                    key, self.serialize(value), self.serialize({}), updated)
+                )
+            c.execute("COMMIT")
+
+    def delete(self, keys):
+        """Delete all these keys in a single transaction
+        """
+        if keys:
+            c = self.conn.cursor()
+            c.execute("BEGIN")
+            for key in keys:
+                c.execute("DELETE FROM config WHERE key=?;", (key,))
+            c.execute("COMMIT")
 
     def serialize(self, value):
         """convert object to a compressed pickled string to save in the db

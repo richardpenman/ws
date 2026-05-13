@@ -252,8 +252,8 @@ def regex_get(html, pattern, index=None, normalized=True, flag=re.DOTALL|re.IGNO
 
 def parse_jsonp(s):
     try:
-        rindex = s.index(b'(')
-        lindex = s.rindex(b')')
+        rindex = s.index('(')
+        lindex = s.rindex(')')
     except IndexError:
         pass
     else:
@@ -379,7 +379,7 @@ class UnicodeWriter:
     >>> fp.read().strip()
     'a,1'
     """
-    def __init__(self, file, encoding=settings.default_encoding, mode='w', unique=False, quoting=csv.QUOTE_ALL, **argv):
+    def __init__(self, file, header=None, encoding=settings.default_encoding, mode='w', unique=False, quoting=csv.QUOTE_ALL, **argv):
         self.encoding = encoding
         self.unique = unique
         self.seen = set()
@@ -387,7 +387,10 @@ class UnicodeWriter:
             self.fp = file
         else:
             self.fp = open(file, mode)
+
         self.writer = csv.writer(self.fp, quoting=quoting, **argv)
+        if header:
+            self.writeheader(header)
         
     def _cell(self, s):
         """Normalize the content for this cell
@@ -412,9 +415,7 @@ class UnicodeWriter:
                 return False
             else:
                 self.seen.add(key)
-                self.writer.writerow(row)
-        else:
-            self.writer.writerow(row)
+        self.writer.writerow(row)
         return True
             
     def writerows(self, rows):
@@ -422,6 +423,22 @@ class UnicodeWriter:
         """
         for row in rows:
             self.writerow(row)
+
+    def writeheader(self, header):
+        for _ in self.get_column(header[0]):
+            break
+        else:
+            self.writerow(header)
+
+    def get_column(self, field):
+        filename = self.fp.name
+        reader = csv.reader(open(filename))
+        column_i = None
+        for row in reader:
+            if column_i is None:
+                column_i = row.index(field)
+            else:
+                yield row[column_i]
 
     def flush(self):
         """Flush output to disk

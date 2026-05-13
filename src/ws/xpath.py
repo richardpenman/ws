@@ -64,6 +64,9 @@ class Tree:
     def __bool__(self):
         return self.doc is not None
 
+    def serialize(self, encoding='unicode'):
+        return lxml.etree.tostring(self.doc, encoding=encoding)
+
 
 def get(html, xpath, remove=None):
     """Return first element from XPath search of HTML

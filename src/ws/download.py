@@ -16,7 +16,7 @@ from . import adt, common, pdict, services, settings, xpath
 
 
 SUCCESS_STATUS = (200, 201)
-NON_RETRIABLE_STATUS = (400, 404, 405, 411, 413, 415, 422, 431)
+NON_RETRIABLE_STATUS = (404, 411, 413, 415, 422, 431)
 
 
 @dataclass
@@ -111,7 +111,12 @@ class Download:
         self.session = session
         self.timeout = timeout
         self.max_retries = max_retries
-        self.proxies = open(proxy_file).read().splitlines() if proxy_file and os.path.exists(proxy_file) else proxies
+        self.proxies = proxies
+        if proxy_file:
+            if os.path.exists(proxy_file):
+                self.proxies = open(proxy_file).read().splitlines()
+            else:
+                print(f'Proxy file {proxy_file} missing')
         # track the number of consecutive download errors for each proxy
         self.proxy_errors = collections.Counter()
         self.browser = browser or Browser()
@@ -165,7 +170,7 @@ class Download:
             response = self.cache[key]
             if isinstance(response, (str, dict)):
                 response = Response(response, 200, '')
-            if self._should_retry(response):
+            if self._should_retry(response, max_retries=max_retries):
                 raise KeyError()
         except KeyError:
             if self.render or render:
@@ -178,11 +183,12 @@ class Download:
 
                 
     def fetch(self, url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth):
+        stealth = stealth or self.stealth
         if self.session is None:
-            session = stealth_requests.StealthSession(http_version=3) if self.stealth or stealth else requests.Session()
+            session = stealth_requests.StealthSession(http_version=3) if stealth else requests.Session()
         else:
             session = self.session
-        headers = self._format_headers(url, headers, user_agent)
+        headers = (headers or {}) if stealth else self._format_headers(url, headers, user_agent) 
         for num_failures in range(max_retries + 1):
             proxy = self.get_proxy() if use_proxy else None
             self._throttle(delay, proxy)
@@ -194,8 +200,8 @@ class Download:
                     request_response = session.get(url, headers=headers, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
             except Exception as e:
                 print('ws.download error:', e)
-                response = Response('', 500, str(e))
                 self.proxy_errors[proxy] += 1
+                response = Response('', 500, str(e))
             else:
                 content = request_response.content if not request_response.encoding or not auto_encoding else request_response.text
                 response = Response(content, request_response.status_code, request_response.reason)
@@ -204,12 +210,13 @@ class Download:
                 summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
                 if self._is_success(response):
                     print(f'Success: {summary}')
+                    del self.proxy_errors[proxy]
                     break
                 else:
                     print(f'Error: {summary} ({num_failures + 1}/{max_retries})')
+                    self.proxy_errors[proxy] += 1
                     if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
                         break
-                self.proxy_errors[proxy] = 0
         if self.session is None:
             session.close()
         return response
@@ -228,10 +235,14 @@ class Download:
 
 
     def wayback(self, url):
-        available_api = self.get('http://archive.org/wayback/available?url=' + url)
-        wayback_url = available_api.json()['archived_snapshots'].get('closest', {}).get('url')
-        if wayback_url:
-           return self.get(wayback_url)
+        available_url = f'https://web.archive.org/cdx/search/cdx?url={url}&output=json&filter=statuscode:200&limit=-1'
+        ajax_response = self.get(available_url)
+        if ajax_response:
+            ajax = ajax_response.json()
+            if ajax:
+                timestamp = ajax[1][1]
+                wayback_url = f'https://web.archive.org/web/{timestamp}id_/{url}'
+                return self.get(wayback_url)
 
 
     def threaded(self, requests_iterator, max_workers=4, filter_duplicates=True):
@@ -291,30 +302,38 @@ class Download:
                     request = active_futures.pop(future)
                     try:
                         response = future.result()
-                        self.cache[request.get_key()] = response
+                        if response is not None:
+                            self.cache[request.get_key()] = response
                         yield from self._handle_threaded_callback(request, response, callback_queue)
-                    except Exception as e:
-                        print(f'Error on {request.url}: {e}')
+                    except Exception:
+                        print(f'Error on {request.url}:\n{traceback.format_exc()}')
 
         
     def _handle_threaded_callback(self, request, response, callback_queue):
         """Internal helper to process callbacks and feed the callback_queue."""
         if request.callback:
-            callback_requests = request.callback(request, response) or iter([])
-            while True:
-                try:
-                    next_request = next(callback_requests)
-                except StopIteration:
-                    break
-                except Exception:
-                    print('Callback error: ' + request.url)
-                    print(traceback.format_exc())
-                else:
-                    if isinstance(next_request, Request):
-                        # We put discovered requests in the callback_queue to be processed next
-                        callback_queue.append(next_request)
+            if not isinstance(response, Response):
+                response = Response(response, 200, '')
+            try:
+                callback_requests = request.callback(request, response) or iter([])
+            except Exception:
+                print('Callback error: ' + request.url)
+                print(traceback.format_exc())
+            else:
+                while True:
+                    try:
+                        next_request = next(callback_requests)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        print('Callback error: ' + request.url)
+                        print(traceback.format_exc())
                     else:
-                        yield next_request
+                        if isinstance(next_request, Request):
+                            # We put discovered requests in the callback_queue to be processed next
+                            callback_queue.append(next_request)
+                        else:
+                            yield next_request
 
 
 class Browser:
