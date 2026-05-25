@@ -26,6 +26,10 @@ Homepage = "https://github.com/richardpenman/ws"
 requires      = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "src/ws"]
+addopts = "--doctest-modules"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

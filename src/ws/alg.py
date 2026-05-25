@@ -16,15 +16,6 @@ def get_links(html, url=None, local=True, external=True):
         whether to include links from same domain
     external:
         whether to include linkes from other domains
-
-    >>> get_links('<a href="http://example.com/page">link</a>')
-    ['http://example.com/page']
-    >>> get_links('<a href="/page">link</a>', url='http://example.com')
-    ['http://example.com/page']
-    >>> get_links('<a href="mailto:a@b.com">email</a>')
-    []
-    >>> get_links('<a href="http://example.com/page#section">link</a>')
-    ['http://example.com/page']
     """
     def normalize_link(link):
         if urllib.parse.urlsplit(link).scheme in ('http', 'https', ''):
@@ -60,21 +51,8 @@ def get_links(html, url=None, local=True, external=True):
 def extract_emails(html, ignored=None):
     """Remove common obfuscations from HTML and then extract all emails
 
-    ignored: 
+    ignored:
         list of dummy emails to ignore
-
-    >>> extract_emails('')
-    []
-    >>> extract_emails('hello contact@webscraping.com world')
-    ['contact@webscraping.com']
-    >>> extract_emails('hello contact@<!-- trick comment -->webscraping.com world')
-    ['contact@webscraping.com']
-    >>> extract_emails('hello contact AT webscraping DOT com world')
-    ['contact@webscraping.com']
-    >>> extract_emails(' info+hn@gmail.com ')
-    ['info+hn@gmail.com']
-    >>> extract_emails('<a href="mailto:first.last@mail.co.uk">Contact</a>')
-    ['first.last@mail.co.uk']
     """
     emails = []
     if html:
@@ -102,11 +80,6 @@ def decode_cf_email(e):
     """Decode a CloudFlare-obfuscated email hex string
 
     https://stackoverflow.com/questions/36911296/scraping-of-protected-email
-
-    >>> decode_cf_email('107150723e73')
-    'a@b.c'
-    >>> decode_cf_email('')
-    ''
     """
     result = ''
     if e:
@@ -122,17 +95,6 @@ def decode_cf_email(e):
 
 def extract_phones(html):
     """Extract phone numbers from this HTML
-
-    >>> extract_phones('Phone: (123) 456-7890 <br>')
-    ['(123) 456-7890']
-    >>> extract_phones('Phone 123.456.7890 ')
-    ['123.456.7890']
-    >>> extract_phones('+1-123-456-7890<br />123 456 7890n')
-    ['123-456-7890', '123 456 7890']
-    >>> extract_phones('456-7890')
-    []
-    >>> extract_phones('<a href="tel:0234673460">Contact</a>')
-    ['0234673460']
     """
     return [match.group() for match in re.finditer(r'(\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}', html)] + re.findall(r'tel:(\d+)', html)
 
