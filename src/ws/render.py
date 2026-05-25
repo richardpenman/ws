@@ -54,7 +54,7 @@ class CacheBrowser:
     def format_cookies(self, cookie_jar):
         cookies = []
         for cookie in cookie_jar or []:
-            cookies.append({'name': cookie.name, 'value': cookie.value, 'path': cookie.path, 'domain': cookie.domain, 'secure': cookie.secure, 'expiry': cookie.expiry})
+            cookies.append({'name': cookie.name, 'value': cookie.value, 'path': cookie.path, 'domain': cookie.domain, 'secure': cookie.secure, 'expiry': cookie.expires})
         return cookies
 
     def load_cookies(self, url):

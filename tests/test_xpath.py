@@ -39,13 +39,11 @@ class TestTree:
         assert t.search('//span') == []
         assert str(t.get('//p')) == 'keep'
 
-    def test_remove_already_removed_raises(self):
+    def test_remove_already_removed_returns_false(self):
         t = Tree('<div><span>a</span></div>')
         span = t.get('//span')
         assert t.remove(span) is True
-        # removing again raises because parent is now None
-        with pytest.raises(AttributeError):
-            t.remove(span)
+        assert t.remove(span) is False
 
     def test_json_parses_text_content(self):
         assert Tree('<pre>{"key": 1}</pre>').get('//pre').json() == {'key': 1}

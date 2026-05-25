@@ -279,11 +279,13 @@ def parse_jsonp(s):
     {'a': 1}
     >>> parse_jsonp('fn([1, 2, 3])')
     [1, 2, 3]
+    >>> parse_jsonp('no parens here') is None
+    True
     """
     try:
         rindex = s.index('(')
         lindex = s.rindex(')')
-    except IndexError:
+    except ValueError:
         pass
     else:
         return json.loads(s[rindex+1 : lindex])

@@ -39,7 +39,7 @@ class Tree:
     def remove(self, e):
         try:
             e.doc.getparent().remove(e.doc)
-        except ValueError:
+        except (ValueError, AttributeError):
             return False
         else:
             return True

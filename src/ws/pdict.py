@@ -130,9 +130,6 @@ class PersistentDict:
     def __bool__(self):
         return True
 
-    def __nonzero__(self):
-        return True
-
 
     def __len__(self):
         """Return the number of entries in the cache
@@ -275,7 +272,7 @@ class PersistentDict:
         """Merge this databases content
         override determines whether to override existing keys
         """
-        for key in db.keys():
+        for key in db:
             if override or key not in self:
                 self[key] = db[key]
 

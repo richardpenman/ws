@@ -21,12 +21,7 @@ class GoogleMaps:
         language:
             the language to set
         """
-        try:
-            address = address.encode('utf-8')
-        except UnicodeDecodeError:
-            print('Geocode failed to parse address and needed to cast to ascii: ' + address)
-            address = common.to_ascii(address)
-        address = re.sub(u'%C2%9\d*', '', urllib.parse.quote_plus(address))
+        address = re.sub(r'%C2%9\d*', '', urllib.parse.quote_plus(address))
         geocode_url = 'https://maps.google.com/maps/api/geocode/json?address=%s&key=%s&sensor=false%s' % (address, self.api_key, '&language=' + language if language else '')
         geocode_response = self.D.get(geocode_url, delay=delay, max_retries=max_retries, use_proxy=False, auto_encoding=False)
         geocode_data = self.load_result(geocode_url, geocode_response.text)

@@ -226,7 +226,7 @@ def download_zipcodes(country_code):
 
     if not found:
         search_html = requests.get('http://www.geonames.org/postalcode-search.html?q=&country=' + country_code.upper()).text
-        trs = xpath.search(search_html, '//table[@class="restable"]/tr')
+        trs = xpath.Tree(search_html).search('//table[@class="restable"]/tr')
         while trs:
             tds = trs.pop(0).search('./td')
             if any(tds):

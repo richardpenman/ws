@@ -184,18 +184,36 @@ class TestPersistentDictRename:
         assert len(self.db) == 1
 
 
-class TestPersistentDictMerge:
-    """Note: merge uses db.keys() so only works with dict-like sources, not PersistentDict."""
+class TestPersistentDictKeys:
+    def test_keys_returns_all_keys(self):
+        db = PersistentDict(':memory:')
+        db['a'] = 1
+        db['b'] = 2
+        assert set(list(db)) == {'a', 'b'}
 
+    def test_keys_empty_db(self):
+        db = PersistentDict(':memory:')
+        assert list(db) == []
+
+
+class TestPersistentDictMerge:
     def setup_method(self):
         self.db = PersistentDict(':memory:')
 
-    def test_merge_adds_missing_keys(self):
+    def test_merge_from_dict(self):
         self.db['a'] = 1
         self.db.merge({'b': 2, 'c': 3})
         assert self.db['b'] == 2
         assert self.db['c'] == 3
         assert self.db['a'] == 1
+
+    def test_merge_from_persistent_dict(self):
+        source = PersistentDict(':memory:')
+        source['x'] = 10
+        source['y'] = 20
+        self.db.merge(source)
+        assert self.db['x'] == 10
+        assert self.db['y'] == 20
 
     def test_merge_no_override_by_default(self):
         self.db['k'] = 'original'
