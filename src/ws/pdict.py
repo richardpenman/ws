@@ -37,7 +37,7 @@ class PersistentDict:
     isolation_level: 
         None for autocommit or else 'DEFERRED' / 'IMMEDIATE' / 'EXCLUSIVE'
 
-    >>> cache = PersistentDict()
+    >>> cache = PersistentDict(':memory:')
     >>> url = 'http://google.com/abc'
     >>> html = '<html>abc</html>'
     >>>
@@ -62,7 +62,6 @@ class PersistentDict:
     >>> del cache[url]
     >>> url in cache
     False
-    >>> os.remove(cache.filename)
     """
     def __init__(self, filename='cache.db', compress_level=6, expires=None, timeout=DEFAULT_TIMEOUT, isolation_level=None):
         """initialize a new PersistentDict with the specified database file.
@@ -103,13 +102,12 @@ class PersistentDict:
         """check if a list of keys exist
     
         >>> # try 0 second expiration so expires immediately
-        >>> cache = PersistentDict(expires=datetime.timedelta(seconds=0))
+        >>> cache = PersistentDict(':memory:', expires=datetime.timedelta(seconds=0))
         >>> cache['a'] = 1; 
         >>> cache.contains(['a', 'b'])
         []
         >>> cache.contains(['a', 'b'], ignore_expires=True)
-        [u'a']
-        >>> os.remove(cache.filename)
+        ['a']
         """
         results = []
         c = self.conn.cursor()
@@ -320,7 +318,7 @@ if __name__ == '__main__':
     elif options.key:
         print(cache[options.key])
     elif options.clear:
-        if raw_input('Really? Clear the cache? (y/n) ') == 'y':
+        if input('Really? Clear the cache? (y/n) ') == 'y':
             cache.clear()
             print('cleared')
     elif options.size:

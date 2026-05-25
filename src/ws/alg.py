@@ -16,6 +16,15 @@ def get_links(html, url=None, local=True, external=True):
         whether to include links from same domain
     external:
         whether to include linkes from other domains
+
+    >>> get_links('<a href="http://example.com/page">link</a>')
+    ['http://example.com/page']
+    >>> get_links('<a href="/page">link</a>', url='http://example.com')
+    ['http://example.com/page']
+    >>> get_links('<a href="mailto:a@b.com">email</a>')
+    []
+    >>> get_links('<a href="http://example.com/page#section">link</a>')
+    ['http://example.com/page']
     """
     def normalize_link(link):
         if urllib.parse.urlsplit(link).scheme in ('http', 'https', ''):
@@ -69,18 +78,18 @@ def extract_emails(html, ignored=None):
     """
     emails = []
     if html:
-        email_re = re.compile('([\w\.\-\+]{1,64})@(\w[\w\.-]{1,255})\.(\w+)')
+        email_re = re.compile(r'([\w\.\-\+]{1,64})@(\w[\w\.-]{1,255})\.(\w+)')
         # remove comments, which can obfuscate emails
         html = re.compile('<!--.*?-->', re.DOTALL).sub('', html).replace('mailto:', '')
         for user, domain, ext in email_re.findall(html):
-            if ext.lower() not in common.MEDIA_EXTENSIONS and len(ext)>=2 and not re.compile('\d').search(ext) and domain.count('.')<=3:
+            if ext.lower() not in common.MEDIA_EXTENSIONS and len(ext)>=2 and not re.compile(r'\d').search(ext) and domain.count('.')<=3:
                 email = '%s@%s.%s' % (user, domain, ext)
                 if email not in emails:
                     emails.append(email)
 
         # look for obfuscated email
-        for user, domain, ext in re.compile('([\w\.\-\+]{1,64})\s?.?AT.?\s?([\w\.-]{1,255})\s?.?DOT.?\s?(\w+)', re.IGNORECASE).findall(html):
-            if ext.lower() not in common.MEDIA_EXTENSIONS and len(ext)>=2 and not re.compile('\d').search(ext) and domain.count('.')<=3:
+        for user, domain, ext in re.compile(r'([\w\.\-\+]{1,64})\s?.?AT.?\s?([\w\.-]{1,255})\s?.?DOT.?\s?(\w+)', re.IGNORECASE).findall(html):
+            if ext.lower() not in common.MEDIA_EXTENSIONS and len(ext)>=2 and not re.compile(r'\d').search(ext) and domain.count('.')<=3:
                 email = '%s@%s.%s' % (user, domain, ext)
                 if email not in emails:
                     emails.append(email)
@@ -90,7 +99,14 @@ def extract_emails(html, ignored=None):
 
 
 def decode_cf_email(e):
-    """https://stackoverflow.com/questions/36911296/scraping-of-protected-email
+    """Decode a CloudFlare-obfuscated email hex string
+
+    https://stackoverflow.com/questions/36911296/scraping-of-protected-email
+
+    >>> decode_cf_email('107150723e73')
+    'a@b.c'
+    >>> decode_cf_email('')
+    ''
     """
     result = ''
     if e:
@@ -118,30 +134,7 @@ def extract_phones(html):
     >>> extract_phones('<a href="tel:0234673460">Contact</a>')
     ['0234673460']
     """
-    return [match.group() for match in re.finditer('(\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}', html)] + re.findall('tel:(\d+)', html)
-
-
-def parse_us_address(address):
-    """Parse USA address into address, city, state, and zip code
-
-    >>> parse_us_address('6200 20th Street, Vero Beach, FL 32966')
-    ('6200 20th Street', 'Vero Beach', 'FL', '32966')
-    """
-    city = state = zipcode = ''
-    addrs = map(lambda x:x.strip(), address.split(','))
-    if addrs:
-        m = re.compile('([A-Z]{2,})\s*(\d[\d\-\s]+\d)').search(addrs[-1])
-        if m:
-            state = m.groups()[0].strip()
-            zipcode = m.groups()[1].strip()
-
-            if len(addrs)>=3:
-                city = addrs[-2].strip()
-                address = ','.join(addrs[:-2])
-            else:
-                address = ','.join(addrs[:-1])
-            
-    return address, city, state, zipcode
+    return [match.group() for match in re.finditer(r'(\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}', html)] + re.findall(r'tel:(\d+)', html)
 
 
 def get_earth_radius(scale):

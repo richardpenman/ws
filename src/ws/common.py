@@ -19,7 +19,6 @@ import threading
 import collections
 from datetime import datetime, timedelta
 import sqlite3
-import json
 from html import unescape
 import requests
 from . import adt, settings, xpath
@@ -87,6 +86,13 @@ def to_float(s, default=0.0):
     
 def is_html(html):
     """Returns whether content is likely HTML based on search for common tags
+
+    >>> is_html('<html><body>test</body></html>')
+    True
+    >>> is_html('plain text')
+    False
+    >>> is_html(None)
+    False
     """
     try:
         result = re.search('html|head|body', html) is not None
@@ -136,6 +142,15 @@ def flatten(l):
 
 def nth(l, i, default=''):
     """Return nth item from list or default value if out of range
+
+    >>> nth([1, 2, 3], 0)
+    1
+    >>> nth([1, 2, 3], 2)
+    3
+    >>> nth([1, 2, 3], 5)
+    ''
+    >>> nth([1, 2, 3], 5, default=0)
+    0
     """
     try:
         return l[i] 
@@ -154,6 +169,11 @@ def first(l, default=''):
 
 def last(l, default=''):
     """Return last element from list or default value if out of range
+
+    >>> last([1, 2, 3])
+    3
+    >>> last([])
+    ''
     """
     return nth(l, i=-1, default=default)
 
@@ -164,15 +184,17 @@ def pad(l, size, default=None, end=True):
     Remove elements if too large
     Manipulate end of list if end is True, else start
 
-    >>> pad(range(5), 5)
+    >>> l = [0, 1, 2, 3, 4]
+    >>> pad(l, 5)
     [0, 1, 2, 3, 4]
-    >>> pad(range(5), 3)
+    >>> pad(l, 3)
     [0, 1, 2]
-    >>> pad(range(5), 7, -1)
+    >>> pad(l, 7, -1)
     [0, 1, 2, 3, 4, -1, -1]
-    >>> pad(range(5), 7, end=False)
+    >>> pad(l, 7, end=False)
     [None, None, 0, 1, 2, 3, 4]
     """
+    l = list(l)
     while len(l) < size:
         if end:
             l.append(default)
@@ -201,12 +223,12 @@ def remove_tags(html, keep_children=True):
     """
     if isinstance(html, xpath.Tree):
         html = str(html)
-    html = re.sub('<(%s)[^>]*>' % '|'.join(EMPTY_TAGS), '', html)
+    html = re.sub(r'<(%s)[^>]*>' % '|'.join(EMPTY_TAGS), '', html)
     if not keep_children:
-        for tag in unique(re.findall('<(\w+?)\W', html)):
+        for tag in unique(re.findall(r'<(\w+?)\W', html)):
             if tag not in EMPTY_TAGS:
-                html = re.compile('<\s*%s.*?>.*?</\s*%s\s*>' % (tag, tag), re.DOTALL).sub('', html)
-    return re.compile('<[^<]*?>').sub('', html)
+                html = re.compile(r'<\s*%s.*?>.*?</\s*%s\s*>' % (tag, tag), re.DOTALL).sub('', html)
+    return re.compile(r'<[^<]*?>').sub('', html)
     
 
 def normalize(s, encoding=settings.default_encoding, keep_newlines=False):
@@ -226,14 +248,14 @@ def normalize(s, encoding=settings.default_encoding, keep_newlines=False):
             s = re.sub('[ \t\f\v]+', ' ', s)
         else:
             # replace all subsequent whitespace with single space
-            s = re.sub('[\s]+', ' ', s) 
+            s = re.sub(r'[\s]+', ' ', s) 
         s = re.compile('<!--.*?-->', re.DOTALL).sub('', s).strip()
     return s
 
 
 def regex_get(html, pattern, index=None, normalized=True, flag=re.DOTALL|re.IGNORECASE, default='', one=False):
-    """Helper method to extract content from regular expression
-    
+    r"""Helper method to extract content from regular expression
+
     >>> regex_get('<div><span>Phone: 029&nbsp;01054609</span><span></span></div>', r'<span>Phone:([^<>]+)')
     '029 01054609'
     >>> regex_get('<div><span>Phone: 029&nbsp;01054609</span><span></span></div>', r'<span>Phone:\s*(\d+)&nbsp;(\d+)')
@@ -251,6 +273,13 @@ def regex_get(html, pattern, index=None, normalized=True, flag=re.DOTALL|re.IGNO
 
 
 def parse_jsonp(s):
+    """Parse a JSONP response string, returning the JSON payload
+
+    >>> parse_jsonp('callback({"a": 1})')
+    {'a': 1}
+    >>> parse_jsonp('fn([1, 2, 3])')
+    [1, 2, 3]
+    """
     try:
         rindex = s.index('(')
         lindex = s.rindex(')')
@@ -268,7 +297,7 @@ def get_extension(url):
     >>> get_extension('http://www.google-analytics.com/__utm.gif?utmwv=1.3&utmn=420639071')
     'gif'
     """
-    return os.path.splitext(urlparse.urlsplit(url).path)[-1].lower().replace('.', '')
+    return os.path.splitext(urllib.parse.urlsplit(url).path)[-1].lower().replace('.', '')
 
 
 def get_domain(url):
@@ -329,7 +358,7 @@ def parse_proxy(proxy):
     """
     fragments = adt.Bag()
     if isinstance(proxy, str):
-        match = re.match('((?P<username>\w+):(?P<password>\w+)@)?(?P<host>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3})(:(?P<port>\d+))?', proxy)
+        match = re.match(r'((?P<username>\w+):(?P<password>\w+)@)?(?P<host>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3})(:(?P<port>\d+))?', proxy)
         if match:
             groups = match.groupdict()
             fragments.username = groups.get('username') or ''
@@ -372,10 +401,13 @@ class UnicodeWriter:
     
     >>> from io import StringIO
     >>> fp = StringIO()
-    >>> writer = UnicodeWriter(fp, quoting=csv.QUOTE_MINIMAL)
+    >>> writer = UnicodeWriter(fp, quoting=csv.QUOTE_MINIMAL, unique=True)
     >>> writer.writerow(['a', '1'])
-    >>> writer.flush()
+    True
+    >>> writer.writerow(['a', '1'])
+    False
     >>> fp.seek(0)
+    0
     >>> fp.read().strip()
     'a,1'
     """
@@ -392,19 +424,6 @@ class UnicodeWriter:
         if header:
             self.writeheader(header)
         
-    def _cell(self, s):
-        """Normalize the content for this cell
-        """
-        if isinstance(s, xpath.Tree):
-            s = str(s)
-        if isinstance(s, str):
-            s = s.encode(self.encoding, 'ignore')
-        elif s is None:
-            s = ''
-        else:
-            pass
-        return s
-
     def writerow(self, row):
         """Write row to output and returns whether was written.
         """
@@ -462,7 +481,7 @@ def csv_to_xls(filename):
         reader = csv.reader(f)
         for r, row in enumerate(reader):
             for c, col in enumerate(row):
-                worksheet.write(r, c, col.decode('utf-8'))
+                worksheet.write(r, c, col)
     workbook.close()
 
 

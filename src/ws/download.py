@@ -1,7 +1,6 @@
 
 import collections, json, random, re, time, os, logging, traceback, urllib.parse
 import xml.etree.ElementTree as ET
-import concurrent
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -343,8 +342,8 @@ class Browser:
 
     def __del__(self):
         if self.initialized:
-            self.playwright.stop()
             self.browser.close()
+            self.playwright.stop()
 
     def get(self, url, proxy=None, timeout=30, wait_until='load'):
         """

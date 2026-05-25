@@ -62,6 +62,12 @@ class Tree:
                 return ''
 
     def __bool__(self):
+        """
+        >>> bool(Tree('<p>hello</p>'))
+        True
+        >>> bool(Tree(None))
+        False
+        """
         return self.doc is not None
 
     def serialize(self, encoding='unicode'):
@@ -70,11 +76,21 @@ class Tree:
 
 def get(html, xpath, remove=None):
     """Return first element from XPath search of HTML
+
+    >>> get('<div><p>hello</p></div>', '//p')
+    'hello'
+    >>> get('<div></div>', '//p')
+    ''
     """
     return str(Tree(html, remove=remove).get(xpath))
 
 def search(html, xpath, remove=None):
     """Return all elements from XPath search of HTML
+
+    >>> search('<ul><li>a</li><li>b</li></ul>', '//li')
+    ['a', 'b']
+    >>> search('<div></div>', '//p')
+    []
     """
     return [str(e) for e in Tree(html, remove=remove).search(xpath)]
 
