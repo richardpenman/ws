@@ -6,8 +6,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Callable
 
-import requests
-import stealth_requests
+import curl_cffi
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import ua_generator
 
@@ -80,7 +79,7 @@ class Response:
         return self
 
     def save(self, filename, flag='w'):
-        open(filename, flag).write(self.text)
+        open(filename, flag).write(self.utf().text)
 
     def __str__(self):
         return '{}: {}'.format(self.status_code, self.text[:100] if self.text else '')
@@ -120,16 +119,7 @@ class Download:
         self.proxy_errors = collections.Counter()
         self.browser = browser or Browser()
         self.render = render
-        self.stealth = stealth
         self._throttle = Throttle(delay)
-
-    def _format_headers(self, url, headers, user_agent):
-        headers = headers or {}
-        user_agent = user_agent or ua_generator.generate(device='desktop', browser=('chrome', 'edge')).text
-        for name, value in list(settings.default_headers.items()) + [('User-Agent', user_agent), ('Referer', url)]:
-            if name not in headers and name.lower() not in headers:
-                headers[name] = value
-        return headers
 
     def _format_data(self, data, max_length=100):
         if data:
@@ -175,19 +165,17 @@ class Download:
             if self.render or render:
                 response = self.browser.get(url, self.get_proxy(), self.timeout)
             else:
-                response = self.fetch(url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth)
+                response = self.fetch(url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy)
             if write_cache:
                 self.cache[key] = response
         return response
 
                 
-    def fetch(self, url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy, stealth):
-        stealth = stealth or self.stealth
+    def fetch(self, url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy):
         if self.session is None:
-            session = stealth_requests.StealthSession(http_version=3) if stealth else requests.Session()
+            session = self.get_session()
         else:
             session = self.session
-        headers = (headers or {}) if stealth else self._format_headers(url, headers, user_agent) 
         for num_failures in range(max_retries + 1):
             proxy = self.get_proxy() if use_proxy else None
             self._throttle(delay, proxy)
@@ -198,7 +186,7 @@ class Download:
                 else:
                     request_response = session.get(url, headers=headers, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
             except Exception as e:
-                print('ws.download error:', e)
+                print('ws.download error:', url, e)
                 self.proxy_errors[proxy] += 1
                 response = Response('', 500, str(e))
             else:
@@ -220,6 +208,9 @@ class Download:
             session.close()
         return response
 
+
+    def get_session(self, impersonate='firefox'):
+        return curl_cffi.Session(impersonate=impersonate)
 
     def get_proxy(self):
         if self.proxies:

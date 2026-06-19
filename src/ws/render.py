@@ -118,7 +118,7 @@ class CacheBrowser:
         return response
 
 
-    def get(self, url, read_cache=True, write_cache=True, retry=True, delay=5, wait_xpath=None):
+    def get(self, url, read_cache=True, write_cache=True, retry=True, delay=5, wait_xpath=None, key=None):
         try:
             if not read_cache:
                 raise KeyError()
@@ -140,6 +140,10 @@ class CacheBrowser:
                 self.load_cookies(url)
                 response = self.get_page_source()
                 if write_cache:
-                    self.cache[url] = response
+                    self.cache[key or url] = response
                 self.save_cookies()
         return response
+
+
+    def blank(self):
+        self.get('about:blank', read_cache=False, write_cache=False, delay=0)
