@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Callable
 
+import requests
 import curl_cffi
+import primp
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import ua_generator
 
@@ -103,10 +105,70 @@ class Throttle:
         self.last_time[ip] = next_time
 
 
+class Requests:
+    def __init__(self, use_session=False):
+        self.session = self.get_session() if use_session else None
+
+    def get_session(self):
+        return requests.Session()
+
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
+        session = self.get_session() if self.session is None else self.session
+        if data is None:
+            session_response = session.get(url, headers=headers, verify=ssl_verify, proxies=proxies, timeout=timeout)
+        else:
+            session_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=proxies, timeout=timeout)
+
+        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
+        response = Response(content, session_response.status_code, session_response.reason)
+        if session_response.url != url:
+            response.redirect_url = session_response.url
+
+        if self.session is None:
+            session.close()
+        return response
+
+
+class CurlCffi(Requests):
+    def __init__(self, use_session=False, impersonate='firefox'):
+        self.impersonate = impersonate
+        self.session = self.get_session() if use_session else None
+
+    def get_session(self):
+        return curl_cffi.Session(impersonate=self.impersonate)
+
+
+class Primp:
+    def __init__(self, use_session=False, impersonate='chrome'):
+        self.impersonate = impersonate
+        self.session = self.get_session() if use_session else None
+
+    def get_session(self):
+        return primp.Client(impersonate=self.impersonate)
+    
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
+        session = self.get_session() if self.session is None else self.session
+        if proxies:
+            session.proxy = proxies['http']
+        if data is None:
+            session_response = session.get(url, headers=headers, timeout=timeout)
+        else:
+            session_response = session.post(url, headers=headers, data=data, timeout=timeout)
+        
+        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
+        response = Response(content, session_response.status_code, '')
+        if session_response.url != url:
+            response.redirect_url = session_response.url
+
+        #if self.session is None:
+        #    session.close()
+        return response 
+        
+
 class Download:
-    def __init__(self, cache_file='', cache=None, session=None, delay=1, max_retries=1, proxy_file=None, proxies=None, cache_expires=None, timeout=30, browser=None, render=False, stealth=False):
+    def __init__(self, cache_file='', cache=None, delay=1, max_retries=1, proxy_file=None, proxies=None, cache_expires=None, timeout=30, client=None):
         self.cache = cache or pdict.PersistentDict(cache_file or settings.cache_file, expires=cache_expires)
-        self.session = session
+        self.client = CurlCffi() if client is None else client
         self.timeout = timeout
         self.max_retries = max_retries
         self.proxies = proxies
@@ -117,8 +179,6 @@ class Download:
                 print(f'Proxy file {proxy_file} missing')
         # track the number of consecutive download errors for each proxy
         self.proxy_errors = collections.Counter()
-        self.browser = browser or Browser()
-        self.render = render
         self._throttle = Throttle(delay)
 
     def _format_data(self, data, max_length=100):
@@ -148,7 +208,7 @@ class Download:
         else:
             return num_failures < max_retries
 
-    def get(self, url, delay=None, max_retries=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, render=False, stealth=False, key=None):
+    def get(self, url, delay=None, max_retries=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, key=None):
         if isinstance(data, dict):
             data = urllib.parse.urlencode(sorted(data.items()))
         key = key or Request(url, data=data).get_key()
@@ -162,55 +222,31 @@ class Download:
             if self._should_retry(response, max_retries=max_retries):
                 raise KeyError()
         except KeyError:
-            if self.render or render:
-                response = self.browser.get(url, self.get_proxy(), self.timeout)
-            else:
-                response = self.fetch(url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy)
+            for num_failures in range(max_retries + 1):
+                proxy = self.get_proxy() if use_proxy else None
+                self._throttle(delay, proxy)
+                try:
+                    request_proxies = {'http': proxy, 'https': proxy} if proxy else None
+                    response = self.client.fetch(url, headers=headers, data=data, ssl_verify=ssl_verify, proxies=request_proxies, timeout=self.timeout, auto_encoding=auto_encoding)
+                except Exception as e:
+                    print('ws.download error:', url, e)
+                    self.proxy_errors[proxy] += 1
+                    response = Response('', 500, str(e))
+                else:
+                    summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
+                    if self._is_success(response):
+                        print(f'Success: {summary}')
+                        del self.proxy_errors[proxy]
+                        break
+                    else:
+                        print(f'Error: {summary} ({num_failures + 1}/{max_retries})')
+                        self.proxy_errors[proxy] += 1
+                        if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
+                            break
             if write_cache:
                 self.cache[key] = response
         return response
 
-                
-    def fetch(self, url, delay, max_retries, retry_callback, user_agent, headers, data, ssl_verify, auto_encoding, use_proxy):
-        if self.session is None:
-            session = self.get_session()
-        else:
-            session = self.session
-        for num_failures in range(max_retries + 1):
-            proxy = self.get_proxy() if use_proxy else None
-            self._throttle(delay, proxy)
-            try:
-                request_proxies = {'http': proxy, 'https': proxy} if proxy else None
-                if data is not None:
-                    request_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
-                else:
-                    request_response = session.get(url, headers=headers, verify=ssl_verify, proxies=request_proxies, timeout=self.timeout)
-            except Exception as e:
-                print('ws.download error:', url, e)
-                self.proxy_errors[proxy] += 1
-                response = Response('', 500, str(e))
-            else:
-                content = request_response.content if not request_response.encoding or not auto_encoding else request_response.text
-                response = Response(content, request_response.status_code, request_response.reason)
-                if request_response.url != url:
-                    response.redirect_url = request_response.url
-                summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
-                if self._is_success(response):
-                    print(f'Success: {summary}')
-                    del self.proxy_errors[proxy]
-                    break
-                else:
-                    print(f'Error: {summary} ({num_failures + 1}/{max_retries})')
-                    self.proxy_errors[proxy] += 1
-                    if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
-                        break
-        if self.session is None:
-            session.close()
-        return response
-
-
-    def get_session(self, impersonate='firefox'):
-        return curl_cffi.Session(impersonate=impersonate)
 
     def get_proxy(self):
         if self.proxies:
