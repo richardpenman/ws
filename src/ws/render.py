@@ -117,19 +117,21 @@ class CacheBrowser:
             response = result_queue.get(block=False)
         return response
 
-
-    def get(self, url, read_cache=True, write_cache=True, retry=True, delay=5, wait_xpath=None, key=None):
+    def get(self, url, read_cache=True, write_cache=True, retry=True, delay=5, wait_xpath=None, key=None, dl_callback=None):
+        key = key or url
         try:
             if not read_cache:
                 raise KeyError()
-            response = self.cache[url]
+            response = self.cache[key]
             if not response and retry:
                 raise KeyError()
         except KeyError:
             self.init()
             print('Rendering:', url)
+            if dl_callback is None:
+                dl_callback = default_dl_callback
             try:
-                self.driver.get(url)
+                dl_callback(self, url)
             except TimeoutException:
                 print('Request timed out')
                 response = download.Response('', 408, 'Request timed out')
@@ -140,10 +142,15 @@ class CacheBrowser:
                 self.load_cookies(url)
                 response = self.get_page_source()
                 if write_cache:
-                    self.cache[key or url] = response
+                    self.cache[key] = response
                 self.save_cookies()
         return response
 
 
     def blank(self):
         self.get('about:blank', read_cache=False, write_cache=False, delay=0)
+
+
+def default_dl_callback(cb, url):
+    cb.driver.get(url)
+
