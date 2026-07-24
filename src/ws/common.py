@@ -241,7 +241,7 @@ def normalize(s, encoding=settings.default_encoding, keep_newlines=False):
         s = str(s)
     if isinstance(s, str):
         # remove tags and set encoding
-        s = unescape(remove_tags(s))#, encoding=encoding, keep_unicode=isinstance(s, unicode))
+        s = unescape(remove_tags(s))
         if keep_newlines:
             # keep multiple newlines
             s = re.sub('[\n\r]+', '\n', s)
@@ -425,7 +425,10 @@ class UnicodeWriter:
         self.writer = csv.writer(self.fp, quoting=quoting, **argv)
         if header:
             self.writeheader(header)
-        
+       
+    def __len__(self):
+        return len(self.seen)
+
     def writerow(self, row):
         """Write row to output and returns whether was written.
         """

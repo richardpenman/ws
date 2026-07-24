@@ -5,6 +5,9 @@ import os
 import logging
 
 
+SUCCESS_STATUS = (200, 201)
+NON_RETRIABLE_STATUS = (404, 411, 413, 415, 422, 431)
+
 # default location to store output state files
 dirname, filename = os.path.split(sys.argv[0])
 state_dir = os.path.join(dirname, '.' + filename.replace('.py', '')) 

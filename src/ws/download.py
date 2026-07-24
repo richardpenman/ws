@@ -1,22 +1,14 @@
 
 import collections, json, random, re, time, os, logging, traceback, urllib.parse
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Callable
 
-import requests
-import curl_cffi
-import primp
-from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import ua_generator
 
-from . import adt, common, pdict, services, settings, xpath
-
-
-SUCCESS_STATUS = (200, 201)
-NON_RETRIABLE_STATUS = (404, 411, 413, 415, 422, 431)
+from . import adt, clients, common, pdict, services, settings, xpath
+Response = clients.Response
 
 
 @dataclass
@@ -35,61 +27,6 @@ class Request:
         return key
 
 
-class Response:
-    def __init__(self, text, status_code, reason):
-        self.text = text
-        self.status_code = status_code
-        self.reason = reason
-        self.tree = None
-        self.redirect_url = None
-
-    def get(self, path):
-        return self.get_tree().get(path)
-
-    def search(self, path):
-        return self.get_tree().search(path)
-
-    def get_tree(self):
-        if self.tree is None:
-            self.tree = xpath.Tree(self.text)
-        return self.tree
-
-    def regex(self, r, flags=0):
-        return re.compile(r, flags=flags).search(self.text)
-
-    def findall(self, r):
-        return re.findall(r, self.text)
-
-    def json(self):
-        return json.loads(self.text)
-
-    def jsonp(self):
-        return common.parse_jsonp(self.text)
-
-    def xml(self):
-        return ET.fromstring(self.text)
-
-    def utf(self):
-        try:
-            self.text = self.text.decode('utf-8')
-        except (AttributeError, UnicodeDecodeError):
-            pass
-        try:
-            self.text = self.text.encode('latin-1').decode('utf-8')
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            pass
-        return self
-
-    def save(self, filename, flag='w'):
-        open(filename, flag).write(self.utf().text)
-
-    def __str__(self):
-        return '{}: {}'.format(self.status_code, self.text[:100] if self.text else '')
-
-    def __bool__(self):
-        return self.status_code in SUCCESS_STATUS
-
-
 class Throttle:
     def __init__(self, delay=0):
         self.delay = delay
@@ -105,70 +42,10 @@ class Throttle:
         self.last_time[ip] = next_time
 
 
-class Requests:
-    def __init__(self, use_session=False):
-        self.session = self.get_session() if use_session else None
-
-    def get_session(self):
-        return requests.Session()
-
-    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
-        session = self.get_session() if self.session is None else self.session
-        if data is None:
-            session_response = session.get(url, headers=headers, verify=ssl_verify, proxies=proxies, timeout=timeout)
-        else:
-            session_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=proxies, timeout=timeout)
-
-        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
-        response = Response(content, session_response.status_code, session_response.reason)
-        if session_response.url != url:
-            response.redirect_url = session_response.url
-
-        if self.session is None:
-            session.close()
-        return response
-
-
-class CurlCffi(Requests):
-    def __init__(self, use_session=False, impersonate='firefox'):
-        self.impersonate = impersonate
-        self.session = self.get_session() if use_session else None
-
-    def get_session(self):
-        return curl_cffi.Session(impersonate=self.impersonate)
-
-
-class Primp:
-    def __init__(self, use_session=False, impersonate='chrome'):
-        self.impersonate = impersonate
-        self.session = self.get_session() if use_session else None
-
-    def get_session(self):
-        return primp.Client(impersonate=self.impersonate)
-    
-    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
-        session = self.get_session() if self.session is None else self.session
-        if proxies:
-            session.proxy = proxies['http']
-        if data is None:
-            session_response = session.get(url, headers=headers, timeout=timeout)
-        else:
-            session_response = session.post(url, headers=headers, data=data, timeout=timeout)
-        
-        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
-        response = Response(content, session_response.status_code, '')
-        if session_response.url != url:
-            response.redirect_url = session_response.url
-
-        #if self.session is None:
-        #    session.close()
-        return response 
-        
-
 class Download:
     def __init__(self, cache_file='', cache=None, delay=1, max_retries=1, proxy_file=None, proxies=None, cache_expires=None, timeout=30, client=None):
         self.cache = cache or pdict.PersistentDict(cache_file or settings.cache_file, expires=cache_expires)
-        self.client = CurlCffi() if client is None else client
+        self.client = clients.Primp() if client is None else client
         self.timeout = timeout
         self.max_retries = max_retries
         self.proxies = proxies
@@ -191,9 +68,9 @@ class Download:
         return data_str
 
     def _is_success(self, response):
-        if not isinstance(response, Response):
+        if not isinstance(response, clients.Response):
             return True
-        elif response.status_code in SUCCESS_STATUS:
+        elif response.status_code in settings.SUCCESS_STATUS:
             return True
         else:
             return False
@@ -201,7 +78,7 @@ class Download:
     def _should_retry(self, response, num_failures=0, max_retries=1, retry_callback=None):
         if self._is_success(response):
             return False
-        elif response.status_code in NON_RETRIABLE_STATUS:
+        elif response.status_code in settings.NON_RETRIABLE_STATUS:
             return False
         elif retry_callback is not None and retry_callback(response):
             return True
@@ -218,7 +95,7 @@ class Download:
                 raise KeyError()
             response = self.cache[key]
             if isinstance(response, (str, dict)):
-                response = Response(response, 200, '')
+                response = clients.Response(response, 200, '')
             if self._should_retry(response, max_retries=max_retries):
                 raise KeyError()
         except KeyError:
@@ -229,9 +106,9 @@ class Download:
                     request_proxies = {'http': proxy, 'https': proxy} if proxy else None
                     response = self.client.fetch(url, headers=headers, data=data, ssl_verify=ssl_verify, proxies=request_proxies, timeout=self.timeout, auto_encoding=auto_encoding)
                 except Exception as e:
-                    print('ws.download error:', url, e)
+                    print('ws.download error:', url, type(e), e)
                     self.proxy_errors[proxy] += 1
-                    response = Response('', 500, str(e))
+                    response = clients.Response('', 500, str(e))
                 else:
                     summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
                     if self._is_success(response):
@@ -338,8 +215,8 @@ class Download:
     def _handle_threaded_callback(self, request, response, callback_queue):
         """Internal helper to process callbacks and feed the callback_queue."""
         if request.callback:
-            if not isinstance(response, Response):
-                response = Response(response, 200, '')
+            if not isinstance(response, clients.Response):
+                response = clients.Response(response, 200, '')
             try:
                 callback_requests = request.callback(request, response) or iter([])
             except Exception:
@@ -360,63 +237,3 @@ class Download:
                             callback_queue.append(next_request)
                         else:
                             yield next_request
-
-
-class Browser:
-    def __init__(self, headless=True):
-        self.headless = headless
-        self.initialized = False
-
-    def __del__(self):
-        if self.initialized:
-            self.browser.close()
-            self.playwright.stop()
-
-    def get(self, url, proxy=None, timeout=30, wait_until='load'):
-        """
-        wait_until: commit -> domcontentloaded -> load
-        """
-        print('Rendering: {}'.format(url))
-        if not self.initialized:
-            self.initialized = True
-            self.playwright = sync_playwright().start()
-            self.browser = self.playwright.firefox.launch(headless=self.headless)
-
-        context = self.browser.new_context(proxy=self.parse_proxy(proxy))
-        page = context.new_page()
-        try:
-            response = page.goto(url, wait_until=wait_until, timeout=timeout * 1000)
-        except PlaywrightError as e:
-            print('Render error:', e)
-            content = ''
-            status = 500
-            error = str(e)
-        else:
-            if wait_until == 'commit':
-                content = response.text()
-            else:
-                content = page.content()
-            status = response.status
-            error = ''
-        page.close()
-        context.close()
-        return Response(content, status, error)
-
-    def parse_proxy(self, server):
-        if server:
-            login_regex = re.match('http://(.*?):(.*?)@(.*?)$', server)
-            if login_regex:
-                username, password, server = login_regex.groups()
-                proxy = {
-                    'server': 'http://' + server,
-                    'username': username,
-                    'password': password
-                }
-            else:
-                if not server.startswith('http'):
-                    server = 'http://' + server
-                proxy = {
-                    'server': server
-                }
-            print('PROXY:', proxy)
-            return proxy
