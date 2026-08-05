@@ -93,6 +93,7 @@ class Form:
             self.data[select] = str(option.get('@value'))
         if '' in self.data:
             del self.data['']
+        self.action = str(form_response.get('//form/@action'))
 
     def __getitem__(self, key):
         return self.data[key]
@@ -103,5 +104,6 @@ class Form:
     def __str__(self):
         return urllib.parse.urlencode(self.data)
 
-    def submit(self, D, action, **argv):
+    def submit(self, D, action=None, **argv):
+        action = action or self.action
         return D.get(url=action, data=self.data, **argv)

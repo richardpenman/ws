@@ -107,7 +107,7 @@ class CacheBrowser:
         # Start the fetching in a separate thread
         fetch_thread = threading.Thread(target=get_page_source_cb)
         fetch_thread.start()
-        fetch_thread.join(timeout=5)
+        fetch_thread.join(timeout=10)
 
         # Check if the thread is still alive after the wait
         if fetch_thread.is_alive():
