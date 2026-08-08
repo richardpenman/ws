@@ -73,14 +73,14 @@ class Requests(Client):
         import requests
         return requests.Session()
 
-    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encode):
         session = self.get_session() if self.session is None else self.session
         if data is None:
             session_response = session.get(url, headers=headers, verify=ssl_verify, proxies=proxies, timeout=timeout)
         else:
             session_response = session.post(url, headers=headers, data=data, verify=ssl_verify, proxies=proxies, timeout=timeout)
 
-        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
+        content = session_response.content if not session_response.encoding or not auto_encode else session_response.text
         response = Response(content, session_response.status_code, session_response.reason)
         if session_response.url != url:
             response.redirect_url = session_response.url
@@ -111,7 +111,7 @@ class Primp(Client):
         # Note primp has a bug where can't change the session proxy: https://github.com/deedy5/primp/issues/154
         return primp.Client(impersonate=self.impersonate, proxy=proxy)
     
-    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encode):
         if self.session is None:
             proxy = proxies['http'] if proxies else None
             session = self.get_session(proxy)
@@ -125,14 +125,12 @@ class Primp(Client):
         else:
             session_response = session.post(url, headers=headers, data=data, timeout=timeout)
        
-        content = session_response.content if not session_response.encoding or not auto_encoding else session_response.text
+        content = session_response.content if not session_response.encoding or not auto_encode else session_response.text
         reason = '' # how to get reason?
         response = Response(content, session_response.status_code, reason)
         if session_response.url != url:
             response.redirect_url = session_response.url
 
-        if self.session is None:
-            session.close()
         return response 
 
 
@@ -150,7 +148,7 @@ class Playwright(Client):
             self.browser.close()
             self.playwright.stop()
 
-    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encoding):
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encode):
         if data:
             raise Exception('data not supported')
         from playwright.sync_api import sync_playwright, Error as PlaywrightError
@@ -199,3 +197,57 @@ class Playwright(Client):
                 }
             print('PROXY:', proxy)
             return proxy
+
+
+class BotasaurusDriver(Client):
+    def __init__(self, headless=True, bypass_cloudflare=True):
+        self.headless = headless
+        self.bypass_cloudflare = bypass_cloudflare
+        self.initialized = False
+
+    def __del__(self):
+        if self.initialized:
+            self.driver.close()
+
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encode):
+        if data:
+            raise Exception('data not supported')
+        from botasaurus.browser import Driver, CloudflareDetectionException
+        print(f'Rendering: {url}')
+        if not self.initialized:
+            proxy = proxies['http'] if proxies else None
+            self.driver = Driver(headless=self.headless, proxy=proxy)
+
+        try:
+            response = self.driver.google_get(url, bypass_cloudflare=self.bypass_cloudflare)
+        except CloudflareDetectionException:
+            content = None
+            status_code = 403
+            reason = 'Cloudflare has detected us'
+        else:
+            content = response.page_html
+            status_code = 200
+            reason = ''
+        return Response(content, status_code, reason)
+
+
+class BotasaurusRequest(Client):
+    def __init__(self):
+        self.initialized = False
+
+    def __del__(self):
+        if self.initialized:
+            self.request.close()
+
+    def fetch(self, url, headers, data, ssl_verify, proxies, timeout, auto_encode):
+        from botasaurus.request import Request
+        print(f'Rendering: {url}')
+        if not self.initialized:
+            proxy = proxies['http'] if proxies else None
+            self.request = Request(proxy=proxy)
+
+        response = self.request.get(url, headers=headers, data=data)
+        content = response.text
+        status_code = response.status_code
+        reason = response.reason
+        return Response(content, status_code, reason)

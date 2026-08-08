@@ -67,16 +67,18 @@ class Download:
             data_str = ''
         return data_str
 
-    def _is_success(self, response):
+    def _is_success(self, response, success_callback):
         if not isinstance(response, clients.Response):
             return True
+        elif success_callback is not None and not success_callback(response):
+            return False
         elif response.status_code in settings.SUCCESS_STATUS:
             return True
         else:
             return False
 
-    def _should_retry(self, response, num_failures=0, max_retries=1, retry_callback=None):
-        if self._is_success(response):
+    def _should_retry(self, response, num_failures, max_retries, retry_callback, success_callback):
+        if self._is_success(response, success_callback=success_callback):
             return False
         elif response.status_code in settings.NON_RETRIABLE_STATUS:
             return False
@@ -85,7 +87,7 @@ class Download:
         else:
             return num_failures < max_retries
 
-    def get(self, url, delay=None, max_retries=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encoding=True, use_proxy=True, key=None):
+    def get(self, url, delay=None, max_retries=None, success_callback=None, retry_callback=None, user_agent='', read_cache=True, write_cache=True, headers=None, data=None, ssl_verify=True, auto_encode=True, use_proxy=True, key=None):
         if isinstance(data, dict):
             data = urllib.parse.urlencode(sorted(data.items()))
         key = key or Request(url, data=data).get_key()
@@ -96,7 +98,7 @@ class Download:
             response = self.cache[key]
             if isinstance(response, (str, dict)):
                 response = clients.Response(response, 200, '')
-            if self._should_retry(response, max_retries=max_retries):
+            if self._should_retry(response, num_failures=0, max_retries=max_retries, retry_callback=retry_callback, success_callback=success_callback):
                 raise KeyError()
         except KeyError:
             for num_failures in range(max_retries + 1):
@@ -104,21 +106,21 @@ class Download:
                 self._throttle(delay, proxy)
                 try:
                     request_proxies = {'http': proxy, 'https': proxy} if proxy else None
-                    response = self.client.fetch(url, headers=headers, data=data, ssl_verify=ssl_verify, proxies=request_proxies, timeout=self.timeout, auto_encoding=auto_encoding)
+                    response = self.client.fetch(url, headers=headers, data=data, ssl_verify=ssl_verify, proxies=request_proxies, timeout=self.timeout, auto_encode=auto_encode)
                 except Exception as e:
                     print('ws.download error:', url, type(e), e)
                     self.proxy_errors[proxy] += 1
                     response = clients.Response('', 500, str(e))
                 else:
                     summary = '{} | {} {}'.format(response.status_code, url, self._format_data(data))
-                    if self._is_success(response):
+                    if self._is_success(response, success_callback):
                         print(f'Success: {summary}')
                         del self.proxy_errors[proxy]
                         break
                     else:
                         print(f'Error: {summary} ({num_failures + 1}/{max_retries})')
                         self.proxy_errors[proxy] += 1
-                        if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback):
+                        if not self._should_retry(response=response, num_failures=num_failures, max_retries=max_retries, retry_callback=retry_callback, success_callback=success_callback):
                             break
             if write_cache:
                 self.cache[key] = response
